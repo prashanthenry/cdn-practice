@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+zone_id         = "your-32-character-zone-id"
+domain          = "example.com"
+origin_hostname = "yourname.github.io"

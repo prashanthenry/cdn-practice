@@ -1,0 +1,35 @@
+[
+  {
+    "name": "HTTP is upgraded to HTTPS",
+    "url": "http://www.{domain}/",
+    "status": 301,
+    "location": "https://www.{domain}/"
+  },
+  {
+    "name": "Apex redirects to www",
+    "url": "https://{domain}/about?ref=test",
+    "status": 301,
+    "location": "https://www.{domain}/about?ref=test"
+  },
+  {
+    "name": "Home page loads with security headers",
+    "url": "https://www.{domain}/",
+    "status": 200,
+    "headers": {
+      "Strict-Transport-Security": "max-age=31536000",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    }
+  },
+  {
+    "name": "Static assets are cached at the edge",
+    "url": "https://www.{domain}/static/style.css",
+    "status": 200,
+    "expect_cache_hit": true
+  },
+  {
+    "name": "WAF blocks WordPress probes",
+    "url": "https://www.{domain}/wp-login.php",
+    "status": 403
+  }
+]

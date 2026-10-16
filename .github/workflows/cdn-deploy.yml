@@ -1,0 +1,91 @@
+name: cdn-deploy
+
+# PR      -> lint, unit tests, terraform plan (nothing changes)
+# main    -> apply to the zone, validate live behavior, roll back signal on failure
+#
+# Akamai mapping: "apply" here = activate a property version on STAGING,
+# "validate" = test against staging, then a gated job activates PRODUCTION.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+  TF_VAR_domain: ${{ vars.DOMAIN }}
+  TF_VAR_origin_hostname: ${{ vars.ORIGIN_HOSTNAME }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  # Remote state in Cloudflare R2 (S3-compatible) - see README "Remote state"
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+
+  plan:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -input=false -backend-config="endpoints={s3=\"https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com\"}"
+      - run: terraform validate
+      - run: terraform plan -input=false -no-color -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
+
+  apply:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production   # add required reviewers in repo settings = manual approval gate
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform
+      - run: terraform init -input=false -backend-config="endpoints={s3=\"https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com\"}"
+      - run: terraform apply -input=false tfplan
+
+  validate:
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Wait for edge propagation
+        run: sleep 30
+      - name: Validate live CDN behavior
+        run: python scripts/validate.py --config scripts/checks.json --domain "${{ vars.DOMAIN }}"
+      - name: On failure
+        if: failure()
+        run: |
+          echo "::error::Validation failed. Roll back by reverting the commit (git revert) and letting the pipeline re-apply."
