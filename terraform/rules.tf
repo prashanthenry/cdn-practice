@@ -140,3 +140,10 @@ resource "cloudflare_ruleset" "waf_custom" {
     }
   ]
 }
+# Bot protection (Akamai equivalent: Bot Manager settings in the security policy)
+# Bot Fight Mode is off because it challenges our CI validator from GitHub's
+# datacenter IPs, and on the Free plan it can't be bypassed with WAF skip rules.
+resource "cloudflare_bot_management" "bots" {
+  zone_id    = var.zone_id
+  fight_mode = false
+}
